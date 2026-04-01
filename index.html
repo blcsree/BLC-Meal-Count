@@ -444,81 +444,32 @@ function hideLoading(){document.getElementById('loadingOverlay').style.display='
 async function apiGet(){const res=await fetch(SHEET_URL);return await res.json();}
 async function apiPost(payload){await fetch(SHEET_URL,{method:'POST',body:JSON.stringify(payload)});}
 
-// FORMAT DATE
+// FORMAT DATE — input is plain "YYYY-MM-DD" string from Apps Script
 function formatDate(raw){
   if(!raw) return '';
   const s = String(raw).trim();
-  // Already YYYY-MM-DD
+  // YYYY-MM-DD format (Apps Script sends this)
   if(/^\d{4}-\d{2}-\d{2}/.test(s)){
     const [yyyy,mm,dd] = s.substring(0,10).split('-');
     return `${dd}.${mm}.${yyyy}`;
   }
-  const d = new Date(raw);
-  if(isNaN(d)) return s;
-  const dd = String(d.getUTCDate()).padStart(2,'0');
-  const mm = String(d.getUTCMonth()+1).padStart(2,'0');
-  const yyyy = d.getUTCFullYear();
-  return dd+'.'+mm+'.'+yyyy;
-}
-
-// FORMAT TIME — Handles multiple formats from Google Sheets
-function formatTime(raw){
-  if(!raw) return '';
-  const s = String(raw).trim();
-  // Already formatted: "8:14 AM"
-  if(/^\d{1,2}:\d{2}\s*(AM|PM)/i.test(s)) return s;
-  // ISO format: "1899-12-30T07:19:40.000Z"
-  if(/^1899-12-30T/.test(s)){
-    const d = new Date(s);
-    if(!isNaN(d)){
-      let h = d.getUTCHours();
-      const min = String(d.getUTCMinutes()).padStart(2,'0');
-      const ampm = h >= 12 ? 'PM' : 'AM';
-      h = h % 12 || 12;
-      return `${h}:${min} ${ampm}`;
-    }
-  }
-  // "Sat Dec 30 1899 08:53:00 GMT+0553" format
-  if(/Dec 30 1899/.test(s) || /1899/.test(s)){
-    const d = new Date(s);
-    if(!isNaN(d)){
-      let h = d.getHours();
-      const min = String(d.getMinutes()).padStart(2,'0');
-      const ampm = h >= 12 ? 'PM' : 'AM';
-      h = h % 12 || 12;
-      return `${h}:${min} ${ampm}`;
-    }
-  }
-  // Try parsing as generic date and extract time
-  const d = new Date(s);
-  if(!isNaN(d)){
-    let h = d.getHours();
-    const min = String(d.getMinutes()).padStart(2,'0');
-    const ampm = h >= 12 ? 'PM' : 'AM';
-    h = h % 12 || 12;
-    return `${h}:${min} ${ampm}`;
-  }
+  // DD.MM.YYYY already formatted
+  if(/^\d{2}\.\d{2}\.\d{4}/.test(s)) return s;
   return s;
 }
 
-// Convert any date value from Sheets → YYYY-MM-DD string
+// Convert any date value → YYYY-MM-DD string for grouping/filtering
 function toRawDate(val){
   if(!val) return '';
   const s = String(val).trim();
-  // YYYY-MM-DD or YYYY-MM-DDTHH:mm... — extract first 10 chars
+  // YYYY-MM-DD — just return first 10 chars
   if(/^\d{4}-\d{2}-\d{2}/.test(s)) return s.substring(0,10);
-  // DD.MM.YYYY format
+  // DD.MM.YYYY → YYYY-MM-DD
   if(/^\d{2}\.\d{2}\.\d{4}/.test(s)){
     const [dd,mm,yyyy] = s.split('.');
     return `${yyyy}-${mm}-${dd}`;
   }
-  // Fallback — parse as date using UTC
-  const d = new Date(val);
-  if(isNaN(d)) return s;
-  const yyyy = d.getUTCFullYear();
-  const mm = String(d.getUTCMonth()+1).padStart(2,'0');
-  const dd = String(d.getUTCDate()).padStart(2,'0');
-  return `${yyyy}-${mm}-${dd}`;
+  return s;
 }
 
 // PARSE DATA
