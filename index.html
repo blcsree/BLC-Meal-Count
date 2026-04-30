@@ -458,6 +458,7 @@ td.num{font-family:'DM Mono',monospace;font-weight:600;color:var(--green2);}
 
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;align-items:center;">
           <button class="btn-submit" style="width:auto;padding:12px 28px;font-size:15px;" onclick="downloadReport()">⬇️ Report Download</button>
+          <button class="btn-submit" style="width:auto;padding:12px 20px;font-size:15px;background:var(--orange);" onclick="showMonthlySummaryModal()">📋 Monthly Summary</button>
           <button class="btn-filter" style="background:var(--orange);padding:12px 18px;" onclick="resetToToday()">📅 Today</button>
           <button class="btn-filter" style="background:#6c757d;padding:12px 18px;" onclick="clearFilters()">🗑️ Clear</button>
           <button class="btn-filter" style="background:var(--green2);padding:12px 18px;" onclick="loadData()">🔄 Refresh</button>
@@ -527,6 +528,28 @@ td.num{font-family:'DM Mono',monospace;font-weight:600;color:var(--green2);}
 </div>
 
 <div class="toast" id="toast"></div>
+
+<!-- MONTHLY SUMMARY MODAL -->
+<div id="monthlySummaryModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:10000;align-items:center;justify-content:center;padding:16px;">
+  <div style="background:var(--card);border-radius:20px;padding:30px 28px;max-width:560px;width:100%;box-shadow:0 8px 40px rgba(0,0,0,0.25);position:relative;">
+    <div style="font-size:20px;font-weight:700;color:var(--green);margin-bottom:20px;">📋 Monthly Summary Report</div>
+    <div style="font-size:13px;color:var(--muted);margin-bottom:18px;">সকল staff-এর monthly meal summary — ব্র্যাক লার্নিং সেন্টার format।</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
+      <div class="form-group" style="margin-bottom:0;"><label>Month</label>
+        <select id="summaryMonth"><option value="01">জানুয়ারি</option><option value="02">ফেব্রুয়ারি</option><option value="03">মার্চ</option><option value="04">এপ্রিল</option><option value="05">মে</option><option value="06">জুন</option><option value="07">জুলাই</option><option value="08">আগস্ট</option><option value="09">সেপ্টেম্বর</option><option value="10">অক্টোবর</option><option value="11">নভেম্বর</option><option value="12">ডিসেম্বর</option></select></div>
+      <div class="form-group" style="margin-bottom:0;"><label>Year</label><input type="number" id="summaryYear" value="2025" min="2020" max="2099"/></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:20px;">
+      <div class="form-group" style="margin-bottom:0;"><label>Breakfast Rate (৳)</label><input type="number" id="summaryBfRate" value="50" min="0"/></div>
+      <div class="form-group" style="margin-bottom:0;"><label>Lunch+Dinner Rate (৳)</label><input type="number" id="summaryLdRate" value="90" min="0"/></div>
+      <div class="form-group" style="margin-bottom:0;"><label>Export Format</label><select id="summaryFormat"><option value="excel">📊 Excel</option><option value="pdf">📄 PDF</option></select></div>
+    </div>
+    <div style="display:flex;gap:10px;">
+      <button class="btn-submit" style="flex:1;padding:13px;" onclick="generateMonthlySummary()">⬇️ Download</button>
+      <button class="btn-action" style="padding:13px 18px;" onclick="document.getElementById(&apos;monthlySummaryModal&apos;).style.display=&apos;none&apos;">✕ বন্ধ</button>
+    </div>
+  </div>
+</div>
 
 <script>
 const SHEET_URL = 'https://script.google.com/macros/s/AKfycbyYSUuRnN6hycIcr5nvDfngFfnxko-bD0-0HLxZSm8d1bXOsPufmDLigvc_EI922zNNdg/exec';
@@ -1426,6 +1449,328 @@ function exportPDF(){
 function doPrint(){
   document.getElementById('printDate').textContent=new Date().toLocaleString('en-BD');
   window.print();
+}
+
+// ─── MONTHLY SUMMARY ────────────────────────────────────────────────
+function showMonthlySummaryModal(){
+  // Set current month/year as default
+  const now = new Date();
+  const mm = String(now.getMonth()+1).padStart(2,'0');
+  const yyyy = now.getFullYear();
+  document.getElementById('summaryMonth').value = mm;
+  document.getElementById('summaryYear').value = yyyy;
+  const modal = document.getElementById('monthlySummaryModal');
+  modal.style.display='flex';
+}
+
+function generateMonthlySummary(){
+  const month = document.getElementById('summaryMonth').value;
+  const year  = String(document.getElementById('summaryYear').value);
+  const fmt   = document.getElementById('summaryFormat').value;
+
+  const prefix = year+'-'+month;
+
+  const monthRecs = records.filter(r=>{
+    const rd = r.rawDate || toRawDate(r.date||'');
+    return rd && rd.startsWith(prefix);
+  });
+
+  const monthNames = {
+    '01':'January','02':'February','03':'March','04':'April',
+    '05':'May','06':'June','07':'July','08':'August',
+    '09':'September','10':'October','11':'November','12':'December'
+  };
+  const monthLabel = (monthNames[month]||month)+' '+year;
+
+  // Aggregate per-person from users list (keep registration order)
+  // Map by fullName → sum meals
+  const personMap = {};
+  users.forEach(u=>{
+    const name = (u.fullName||'').trim();
+    if(!name) return;
+    personMap[name] = {
+      name, pin:u.pin||'—', designation:u.designation||'—',
+      breakfast:0, msnacks:0, lunch:0, esnacks:0, dinner:0, total:0
+    };
+  });
+  // Also add anyone who has records but wasn't in users list
+  monthRecs.forEach(r=>{
+    const name = (r.postedBy||'').trim();
+    if(!name) return;
+    if(!personMap[name]){
+      personMap[name]={name,pin:r.pin||'—',designation:'—',breakfast:0,msnacks:0,lunch:0,esnacks:0,dinner:0,total:0};
+    }
+    const p = personMap[name];
+    p.breakfast += r.breakfast||0;
+    p.msnacks   += r.msnacks||0;
+    p.lunch     += r.lunch||0;
+    p.esnacks   += r.esnacks||0;
+    p.dinner    += r.dinner||0;
+    p.total     += realTotal(r);
+  });
+
+  // Only include persons who have meals in this month
+  const persons = Object.values(personMap).filter(p=>p.total>0);
+
+  if(!persons.length){
+    toast('⚠️ এই মাসে কোনো data নেই','error');
+    return;
+  }
+
+  document.getElementById('monthlySummaryModal').style.display='none';
+
+  const bfRate  = parseFloat(document.getElementById('summaryBfRate').value)||50;
+  const ldRate  = parseFloat(document.getElementById('summaryLdRate').value)||90;
+
+  if(fmt==='excel') exportMonthlySummaryExcel(persons, monthLabel, bfRate, ldRate, month, year);
+  else exportMonthlySummaryPDF(persons, monthLabel, bfRate, ldRate, month, year);
+}
+
+// The 3 special BLC staff with rate = (1000/days)/2.5
+const BLC_SPECIAL_STAFF = ['BLC Staff', 'Md Abdul Awal', 'Dewan Bashir Dad Khan'];
+
+function getDaysInMonth(year, month){
+  return new Date(parseInt(year), parseInt(month), 0).getDate();
+}
+
+function exportMonthlySummaryExcel(persons, monthLabel, bfRate, ldRate, month, year){
+  const wb = XLSX.utils.book_new();
+  const bdDate = new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'2-digit',year:'numeric',timeZone:'Asia/Dhaka'});
+
+  // ── Regular staff (exclude special 3) ──
+  const regularPersons = persons.filter(p => !BLC_SPECIAL_STAFF.some(n => p.name.trim().toLowerCase() === n.toLowerCase()));
+
+  function buildStaffSheet(pList, sheetLabel){
+    // Columns: A=SL No, B=Name, C=Designation, D=PIN,
+    //          E=Total Meal Breakfast, F=Total Meal Lunch+Dinner,
+    //          G=Breakfast Amount, H=Lunch+Dinner Amount, I=Total Amount
+    // Row 1 blank, Row 2 = BRAC Learning Centre (D2), Row 3 = Sreemangal (D3)
+    // Row 4 blank, Row 5 = Summary Report, Row 6 = Month-
+    // Row 7 blank
+    // Row 8 = headers (SL No, Name, Designation, PIN, Total Meal[merged E8:F8], blank, Breakfast Amount, Lunch+Dinner Amount, Total Amount)
+    // Row 9 = sub-headers (blank x4, Breakfast, Lunch+Dinner, blank, blank, blank)
+    const aoa = [
+      [],                                                              // row 0 (row 1)
+      ['', '', '', 'BRAC Learning Centre'],                           // row 1 (row 2)
+      ['', '', '', 'Sreemangal'],                                     // row 2 (row 3)
+      [],                                                              // row 3 (row 4)
+      [sheetLabel],                                                    // row 4 (row 5)
+      ['Month- ' + monthLabel],                                        // row 5 (row 6)
+      [],                                                              // row 6 (row 7)
+      // row 7 (row 8) — main header
+      ['SL No','Name','Designation','PIN','Total Meal','','Breakfast Amount','Lunch+Dinner Amount','Total Amount'],
+      // row 8 (row 9) — sub-header
+      ['','','','','Breakfast','Lunch+Dinner','','','']
+    ];
+
+    let gtBf=0,gtLd=0,gtBfAmt=0,gtLdAmt=0,gtTotal=0;
+    pList.forEach((p,i)=>{
+      const bfQty = p.breakfast;
+      const ldQty = p.lunch + p.dinner; // only lunch+dinner, exclude snacks
+      const bfAmt = parseFloat((bfQty * bfRate).toFixed(2));
+      const ldAmt = parseFloat((ldQty * ldRate).toFixed(2));
+      const total = parseFloat((bfAmt + ldAmt).toFixed(2));
+      gtBf+=bfQty; gtLd+=ldQty; gtBfAmt+=bfAmt; gtLdAmt+=ldAmt; gtTotal+=total;
+      aoa.push([i+1, p.name, p.designation, p.pin, bfQty, ldQty, bfAmt, ldAmt, total]);
+    });
+    aoa.push([]);
+    aoa.push(['','','','Total', gtBf, gtLd, parseFloat(gtBfAmt.toFixed(2)), parseFloat(gtLdAmt.toFixed(2)), parseFloat(gtTotal.toFixed(2))]);
+
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols']=[{wch:7},{wch:28},{wch:24},{wch:12},{wch:12},{wch:16},{wch:18},{wch:20},{wch:14}];
+
+    // Merges:
+    // BRAC Learning Centre: D2:I2 => r1,c3 to r1,c8
+    // Sreemangal:           D3:I3 => r2,c3 to r2,c8
+    // Total Meal header:    E8:F8 => r7,c4 to r7,c5
+    // Breakfast Amount header: G8 rowSpan 2 => handled by empty row 9
+    // Lunch+Dinner Amount header: H8 rowSpan 2
+    // Total Amount header:  I8 rowSpan 2
+    ws['!merges']=[
+      {s:{r:1,c:3},e:{r:1,c:8}},   // BRAC Learning Centre
+      {s:{r:2,c:3},e:{r:2,c:8}},   // Sreemangal
+      {s:{r:7,c:4},e:{r:7,c:5}},   // Total Meal (merged E8:F8)
+      {s:{r:7,c:0},e:{r:8,c:0}},   // SL No rowspan
+      {s:{r:7,c:1},e:{r:8,c:1}},   // Name rowspan
+      {s:{r:7,c:2},e:{r:8,c:2}},   // Designation rowspan
+      {s:{r:7,c:3},e:{r:8,c:3}},   // PIN rowspan
+      {s:{r:7,c:6},e:{r:8,c:6}},   // Breakfast Amount rowspan
+      {s:{r:7,c:7},e:{r:8,c:7}},   // Lunch+Dinner Amount rowspan
+      {s:{r:7,c:8},e:{r:8,c:8}},   // Total Amount rowspan
+    ];
+    return ws;
+  }
+
+  if(regularPersons.length){
+    XLSX.utils.book_append_sheet(wb, buildStaffSheet(regularPersons,'Summary Report'), 'Monthly Summary');
+  }
+
+  // ── BLC Special 3 staff sheet ──
+  const days = getDaysInMonth(year, month);
+  const specialRate = (1000 / days) / 2.5;
+  const specialRateDisplay = parseFloat(specialRate.toFixed(2));
+  const rateFormula = `1000 ÷ ${days} days ÷ 2.5 = ৳${specialRateDisplay}/meal`;
+
+  // Build special persons list — always show all 3 even if 0 meals
+  const allSpecial = BLC_SPECIAL_STAFF.map(sName=>{
+    const found = persons.find(p=>p.name.trim().toLowerCase()===sName.toLowerCase());
+    if(found) return found;
+    const u = users.find(u=>(u.fullName||'').trim().toLowerCase()===sName.toLowerCase());
+    return {name:sName, pin:u?u.pin||'—':'—', designation:u?u.designation||'—':'—', breakfast:0,msnacks:0,lunch:0,esnacks:0,dinner:0,total:0};
+  });
+
+  // Cols: A=SL, B=Name, C=Desig, D=PIN,
+  //        E=Bf Count, F=Bf Amt, G=Lunch Count, H=Lunch Amt,
+  //        I=Dinner Count, J=Dinner Amt, K=Total Meal, L=Rate, M=Total Amount
+  const aoaS = [
+    [],
+    ['', '', '', 'BRAC Learning Centre'],
+    ['', '', '', 'Sreemangal'],
+    [],
+    ['BLC Staff Special Report'],
+    ['Month- ' + monthLabel],
+    ['Rate: 1000 ÷ ' + days + ' days ÷ 2.5 = ৳' + specialRateDisplay + '/meal'],
+    [],
+    ['SL No','Name','Designation','PIN','Breakfast','','Lunch','','Dinner','','Total Meal','Rate (৳)','Total Amount'],
+    ['','','','','Count','Amount','Count','Amount','Count','Amount','','','']
+  ];
+
+  let sGtBf=0,sGtLc=0,sGtDn=0,sGtTotal=0;
+  allSpecial.forEach((p,i)=>{
+    const bf  = p.breakfast;
+    const lc  = p.lunch; // lunch only
+    const dn  = p.dinner; // dinner only
+    const tot = bf + lc + dn;
+    const bfAmt  = parseFloat((bf * specialRate).toFixed(2));
+    const lcAmt  = parseFloat((lc * specialRate).toFixed(2));
+    const dnAmt  = parseFloat((dn * specialRate).toFixed(2));
+    const totAmt = parseFloat((tot * specialRate).toFixed(2));
+    sGtBf+=bf; sGtLc+=lc; sGtDn+=dn; sGtTotal+=totAmt;
+    aoaS.push([i+1, p.name, p.designation, p.pin, bf, bfAmt, lc, lcAmt, dn, dnAmt, tot, specialRateDisplay, totAmt]);
+  });
+  aoaS.push([]);
+  aoaS.push(['','','','Total', sGtBf,'', sGtLc,'', sGtDn,'', sGtBf+sGtLc+sGtDn,'', parseFloat(sGtTotal.toFixed(2))]);
+
+  const wsS = XLSX.utils.aoa_to_sheet(aoaS);
+  wsS['!cols']=[{wch:6},{wch:26},{wch:22},{wch:12},{wch:9},{wch:13},{wch:9},{wch:13},{wch:9},{wch:13},{wch:11},{wch:11},{wch:14}];
+  wsS['!merges']=[
+    {s:{r:1,c:3},e:{r:1,c:9}},  // BRAC Learning Centre
+    {s:{r:2,c:3},e:{r:2,c:9}},  // Sreemangal
+    {s:{r:8,c:4},e:{r:8,c:5}},  // Breakfast merged header
+    {s:{r:8,c:6},e:{r:8,c:7}},  // Lunch merged header
+    {s:{r:8,c:8},e:{r:8,c:9}},  // Dinner merged header
+    {s:{r:8,c:0},e:{r:9,c:0}},  // SL No rowspan
+    {s:{r:8,c:1},e:{r:9,c:1}},  // Name rowspan
+    {s:{r:8,c:2},e:{r:9,c:2}},  // Designation rowspan
+    {s:{r:8,c:3},e:{r:9,c:3}},  // PIN rowspan
+    {s:{r:8,c:10},e:{r:9,c:10}},// Total Meal rowspan
+    {s:{r:8,c:11},e:{r:9,c:11}},// Rate rowspan
+    {s:{r:8,c:12},e:{r:9,c:12}},// Total Amount rowspan
+  ];
+  XLSX.utils.book_append_sheet(wb, wsS, 'BLC Special Staff');
+
+  XLSX.writeFile(wb, `BLC_Monthly_Summary_${monthLabel.replace(/ /g,'_')}.xlsx`);
+  toast('✅ Monthly Summary Excel downloaded!');
+}
+
+function exportMonthlySummaryPDF(persons, monthLabel, bfRate, ldRate, month, year){
+  const {jsPDF}=window.jspdf;
+  const doc=new jsPDF({orientation:'landscape',unit:'mm',format:'a4'});
+  const bdDate=new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'2-digit',year:'numeric',timeZone:'Asia/Dhaka'});
+
+  const regularPersons = persons.filter(p=>!BLC_SPECIAL_STAFF.some(n=>p.name.trim().toLowerCase()===n.toLowerCase()));
+  const days = getDaysInMonth(year, month);
+  const specialRate = (1000/days)/2.5;
+  const specialRateDisplay = parseFloat(specialRate.toFixed(2));
+
+  const allSpecial = BLC_SPECIAL_STAFF.map(sName=>{
+    const found = persons.find(p=>p.name.trim().toLowerCase()===sName.toLowerCase());
+    if(found) return found;
+    const u = users.find(u=>(u.fullName||'').trim().toLowerCase()===sName.toLowerCase());
+    return {name:sName,pin:u?u.pin||'—':'—',designation:u?u.designation||'—':'—',breakfast:0,msnacks:0,lunch:0,esnacks:0,dinner:0,total:0};
+  });
+
+  function drawPageHeader(title){
+    doc.setFillColor(45,106,79);
+    doc.rect(0,0,297,32,'F');
+    doc.setTextColor(255,255,255);
+    doc.setFontSize(15);doc.setFont(undefined,'bold');
+    doc.text('BRAC Learning Centre',148,10,{align:'center'});
+    doc.setFontSize(12);
+    doc.text('Sreemangal',148,18,{align:'center'});
+    doc.setFontSize(9);doc.setFont(undefined,'normal');
+    doc.text(title+'  |  Month: '+monthLabel,20,27);
+    doc.text('Date: '+bdDate,278,27,{align:'right'});
+  }
+
+  // ── Page 1: Regular staff ──
+  drawPageHeader('Summary Report');
+  const regBody=[];
+  let gtBf=0,gtLd=0,gtAmt=0;
+  regularPersons.forEach((p,i)=>{
+    const bfQty=p.breakfast, ldQty=p.lunch+p.dinner; // lunch+dinner only
+    const bfAmt=parseFloat((bfQty*bfRate).toFixed(2)), ldAmt=parseFloat((ldQty*ldRate).toFixed(2));
+    const grand=bfAmt+ldAmt;
+    gtBf+=bfQty;gtLd+=ldQty;gtAmt+=grand;
+    regBody.push([i+1,p.name,p.designation,p.pin,bfQty,ldQty,bfRate,ldRate,grand,grand,'','']);
+  });
+  regBody.push(['','','','Total',gtBf,gtLd,'','',parseFloat(gtAmt.toFixed(2)),parseFloat(gtAmt.toFixed(2)),'','']);
+  doc.autoTable({
+    startY:35,
+    head:[[{content:'SL No',rowSpan:2},{content:'Name',rowSpan:2},{content:'Designation',rowSpan:2},{content:'PIN',rowSpan:2},{content:'Total Meal',colSpan:2},{content:'Meal Rate',colSpan:2},{content:'Total Amount',rowSpan:2},{content:'Grand Amount',rowSpan:2},{content:'Date of Bill pay',rowSpan:2},{content:'Nagad Rashid No',rowSpan:2}],['Breakfast','Lunch+Dinner','Breakfast','Lunch+Dinner']],
+    body:regBody,
+    headStyles:{fillColor:[45,106,79],textColor:255,fontStyle:'bold',fontSize:7.5,halign:'center',valign:'middle'},
+    bodyStyles:{fontSize:7.5,halign:'center',valign:'middle'},
+    columnStyles:{0:{cellWidth:10},1:{cellWidth:38,halign:'left'},2:{cellWidth:26,halign:'left'},3:{cellWidth:14},4:{cellWidth:14},5:{cellWidth:18},6:{cellWidth:16},7:{cellWidth:18},8:{cellWidth:20},9:{cellWidth:20},10:{cellWidth:26},11:{cellWidth:18}},
+    alternateRowStyles:{fillColor:[240,248,242]},
+    didParseCell:function(d){if(d.section==='body'&&d.row.index===regularPersons.length){d.cell.styles.fontStyle='bold';d.cell.styles.fillColor=[45,106,79];d.cell.styles.textColor=255;}},
+    margin:{left:6,right:6}
+  });
+  let sigY=doc.lastAutoTable.finalY+14;
+  doc.setTextColor(30,30,30);doc.setFontSize(9);doc.setFont(undefined,'normal');
+  doc.text('Prepared by: ___________________',20,sigY);
+  doc.text('Approved by: ___________________',120,sigY);
+  doc.text('Date: ___________________',230,sigY);
+
+  // ── Page 2: BLC Special staff ──
+  doc.addPage();
+  drawPageHeader('BLC Staff Special Report');
+  doc.setTextColor(30,30,30);
+  doc.setFontSize(8.5);
+  doc.text('Rate: 1000 ÷ '+days+' days ÷ 2.5 = ৳'+specialRateDisplay+'/meal',14,35);
+
+  const spBody=[];
+  let sGtBf=0,sGtLc=0,sGtDn=0,sGtGrand=0;
+  allSpecial.forEach((p,i)=>{
+    const bf=p.breakfast, lc=p.lunch, dn=p.dinner, tot=bf+lc+dn; // pure lunch/dinner only
+    const bfAmt=parseFloat((bf*specialRate).toFixed(2));
+    const lcAmt=parseFloat((lc*specialRate).toFixed(2));
+    const dnAmt=parseFloat((dn*specialRate).toFixed(2));
+    const grand=parseFloat((tot*specialRate).toFixed(2));
+    sGtBf+=bf;sGtLc+=lc;sGtDn+=dn;sGtGrand+=grand;
+    spBody.push([i+1,p.name,p.designation,p.pin,bf,bfAmt,lc,lcAmt,dn,dnAmt,tot,specialRateDisplay,grand,grand,'','']);
+  });
+  spBody.push(['','','','Total',sGtBf,'',sGtLc,'',sGtDn,'',sGtBf+sGtLc+sGtDn,'',parseFloat(sGtGrand.toFixed(2)),parseFloat(sGtGrand.toFixed(2)),'','']);
+
+  doc.autoTable({
+    startY:40,
+    head:[[{content:'SL No',rowSpan:2},{content:'Name',rowSpan:2},{content:'Designation',rowSpan:2},{content:'PIN',rowSpan:2},{content:'Breakfast',colSpan:2},{content:'Lunch',colSpan:2},{content:'Dinner',colSpan:2},{content:'Total Meal',rowSpan:2},{content:'Rate (৳)',rowSpan:2},{content:'Total Amt',rowSpan:2},{content:'Grand Amt',rowSpan:2},{content:'Bill Pay Date',rowSpan:2},{content:'Rashid No',rowSpan:2}],['Count','Amt(৳)','Count','Amt(৳)','Count','Amt(৳)']],
+    body:spBody,
+    headStyles:{fillColor:[45,106,79],textColor:255,fontStyle:'bold',fontSize:7,halign:'center',valign:'middle'},
+    bodyStyles:{fontSize:7.5,halign:'center',valign:'middle'},
+    columnStyles:{0:{cellWidth:9},1:{cellWidth:36,halign:'left'},2:{cellWidth:22,halign:'left'},3:{cellWidth:13},4:{cellWidth:11},5:{cellWidth:14},6:{cellWidth:11},7:{cellWidth:14},8:{cellWidth:11},9:{cellWidth:14},10:{cellWidth:13},11:{cellWidth:12},12:{cellWidth:14},13:{cellWidth:14},14:{cellWidth:20},15:{cellWidth:14}},
+    alternateRowStyles:{fillColor:[240,248,242]},
+    didParseCell:function(d){if(d.section==='body'&&d.row.index===allSpecial.length){d.cell.styles.fontStyle='bold';d.cell.styles.fillColor=[45,106,79];d.cell.styles.textColor=255;}},
+    margin:{left:6,right:6}
+  });
+  let sig2Y=doc.lastAutoTable.finalY+14;
+  doc.setTextColor(30,30,30);doc.setFontSize(9);doc.setFont(undefined,'normal');
+  doc.text('Prepared by: ___________________',20,sig2Y);
+  doc.text('Approved by: ___________________',120,sig2Y);
+  doc.text('Date: ___________________',230,sig2Y);
+
+  doc.save(`BLC_Monthly_Summary_${monthLabel.replace(/ /g,'_')}.pdf`);
+  toast('✅ Monthly Summary PDF downloaded!');
 }
 
 // CHANGE PASSWORD
